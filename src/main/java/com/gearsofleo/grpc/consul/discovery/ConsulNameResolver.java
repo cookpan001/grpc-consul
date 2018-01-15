@@ -20,18 +20,24 @@ import com.orbitz.consul.cache.ConsulCache;
 import com.orbitz.consul.cache.ServiceHealthCache;
 import com.orbitz.consul.cache.ServiceHealthKey;
 import com.orbitz.consul.model.health.ServiceHealth;
+import com.orbitz.consul.option.QueryOptions;
 
 import io.grpc.Attributes;
 import io.grpc.EquivalentAddressGroup;
 import io.grpc.NameResolver;
+import lombok.extern.slf4j.Slf4j;
 
 /**
- * Consul name resolver.
+ * A name resolver that a gRPC message channel can use
+ * to obtain healthy service instances from Consul.
  *
  * @author Andreas Lindfalk
  */
+@Slf4j
 public class ConsulNameResolver extends NameResolver {
 
+	// https://github.com/OrbitzWorldwide/consul-client/issues/135
+	private static final int HEALTH_CACHE_WATCH_SECONDS = 8;
 	private static final long HEALTH_CACHE_AWAIT_INIT_SECONDS = 3;
 
 	private final Consul client;
@@ -64,9 +70,9 @@ public class ConsulNameResolver extends NameResolver {
 	 * {@inheritDoc}
 	 */
 	@Override
-    public String getServiceAuthority() {
-        return this.targetUri.getAuthority();
-    }
+	public String getServiceAuthority() {
+		return this.targetUri.getAuthority();
+	}
 
 	/**
 	 * {@inheritDoc}
@@ -74,7 +80,7 @@ public class ConsulNameResolver extends NameResolver {
 	@Override
 	public void start(Listener listener) {
 
-        String serviceName = getServiceAuthority(); // consul://serviceName
+		String serviceName = getServiceAuthority();
 
 		HealthClient healthClient = this.client.healthClient();
 
@@ -82,7 +88,12 @@ public class ConsulNameResolver extends NameResolver {
 
 		updateListener(nodes, listener);
 
-		this.serviceHealthCache = ServiceHealthCache.newCache(healthClient, serviceName);
+		this.serviceHealthCache = ServiceHealthCache.newCache(
+				healthClient,
+				serviceName,
+				true,
+				QueryOptions.BLANK,
+				HEALTH_CACHE_WATCH_SECONDS);
 
 		addServiceHealthCacheListener(listener);
 
@@ -103,7 +114,7 @@ public class ConsulNameResolver extends NameResolver {
 	 *
 	 * @param listener The gRPC name resolver listener, to notify when the service health cache changes
 	 */
-	private void addServiceHealthCacheListener(Listener listener) {
+	protected void addServiceHealthCacheListener(Listener listener) {
 
 		this.serviceHealthCache.addListener(new ConsulCache.Listener<ServiceHealthKey, ServiceHealth>() {
 
@@ -128,6 +139,9 @@ public class ConsulNameResolver extends NameResolver {
 
 		List<EquivalentAddressGroup> addressGroups = convertToEquivalentAddressGroups(healthyServices);
 
+		log.info("Updated gRPC name resolver listener for service: '{}' with address groups: {}",
+				getServiceAuthority(), addressGroups);
+
 		listener.onAddresses(addressGroups, Attributes.EMPTY);
 	}
 
@@ -148,7 +162,7 @@ public class ConsulNameResolver extends NameResolver {
 			return new EquivalentAddressGroup(new InetSocketAddress(address, port));
 
 		}).collect(Collectors.toList());
-    }
+	}
 
 	/**
 	 * Resolves the appropriate server address for the service given the
@@ -185,8 +199,8 @@ public class ConsulNameResolver extends NameResolver {
 
 			this.client.destroy();
 
-        } catch (Exception e) {
-            throw Throwables.propagate(e);
-        }
+		} catch (Exception e) {
+			throw Throwables.propagate(e);
+		}
 	}
 }
